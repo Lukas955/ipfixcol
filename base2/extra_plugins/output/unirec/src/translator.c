@@ -103,14 +103,14 @@ struct translator_s {
         struct translator_rec *recs;
         /** Number of records                                           */
         size_t size;
-    } table; /** Conversion table                                       */
+    } table; /**< Conversion table                                      */
 
     struct {
         /** Record structure                                            */
         void *data;
         /** Reference to a UniRec template                              */
         const ur_template_t *ur_tmplt;
-    } record;
+    } record; /**< UniRec record structure                              */
 
     struct {
         /**
@@ -131,6 +131,11 @@ struct translator_s {
         /** Number of fields (of above arrays)                          */
         size_t size;
     } progress; /**< Auxiliary conversion variables                     */
+
+    struct {
+        /** IPFIX Message header                                        */
+        const struct fds_ipfix_msg_hdr *hdr;
+    } msg_context; /**< IPFIX context of the record to translate        */
 };
 
 /**
@@ -451,6 +456,44 @@ translate_time(translator_t *trans, const struct translator_rec *rec,
     }
 
     return 1;
+}
+
+/**
+ * \brief Convert "ingressInterface" (EN: 0, ID: 10) to link_bif_field
+ * \copydetails translate_uint()
+ */
+static int
+translate_internal_dbf(translator_t *trans, const struct translator_rec *rec,
+    const struct fds_drec_field *field)
+{
+    uint64_t value;
+    if (fds_get_uint_be(field->data, field->size, &value) != FDS_OK) {
+        return 1; // Conversion failed
+    }
+
+    const ur_field_id_t ur_id = rec->unirec.id;
+    void *field_ptr = ur_get_ptr_by_id(trans->record.ur_tmplt, trans->record.data, ur_id);
+
+    const uint8_t res = value & 0x1;
+    switch (rec->unirec.size) {
+    case 1:
+        *((uint8_t  *) field_ptr) = res;
+        break;
+    case 2:
+        *((uint16_t *) field_ptr) = res;
+        break;
+    case 4:
+        *((uint32_t *) field_ptr) = res;
+        break;
+    case 8:
+        *((uint64_t *) field_ptr) = res;
+        break;
+    default:
+        // Invalid size of the field
+        return 1;
+    }
+
+    return 0;
 }
 
 /**
@@ -863,6 +906,14 @@ translator_init_table(translator_t *trans, const map_t *map, const ur_template_t
     for (size_t i = 0; i < rec_max; ++i) {
         // Get the mapping record
         const struct map_rec *mapping = map_get(map, i);
+        if (mapping->ipfix.source != MAP_SRC_IPFIX) {
+            // Internal function
+
+
+        }
+
+
+
         int ur_id = ur_get_id_by_name(mapping->unirec.name);
         int req_idx = translator_idx_by_id(tmplt, ur_id);
         if (req_idx == IPX_ERR_ARG) {
@@ -965,6 +1016,12 @@ translator_destroy(translator_t *trans)
     translator_destroy_table(trans);
     translator_destroy_record(trans);
     free(trans);
+}
+
+void
+translator_set_context(translator_t *trans, const struct fds_ipfix_msg_hdr *hdr)
+{
+    trans->msg_context.hdr = hdr;
 }
 
 const void *
